@@ -5,6 +5,16 @@
 [![Total alerts](https://img.shields.io/lgtm/alerts/g/HExSA-Lab/nautilus.svg?logo=lgtm&logoWidth=18)](https://lgtm.com/projects/g/HExSA-Lab/nautilus/alerts/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+# Our Project: RTL8139 Driver
+
+Project Proposal: https://docs.google.com/document/d/1r0AZcjnSSVujjXJ9I1zmITuvd4pKmST6FWbgeRGdyqA/edit?usp=sharing
+
+Our Team:
+Brandon Furdock
+George Malty
+Ethan Solomon
+
+
 # Nautilus
 Nautilus is an example of an Aerokernel, a very thin kernel-layer exposed 
 (much like Unikernel) directly to a runtime system and/or application. 
