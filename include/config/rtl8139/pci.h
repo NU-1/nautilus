@@ -1,0 +1,1 @@
+#define NAUT_CONFIG_RTL8139_PCI 1

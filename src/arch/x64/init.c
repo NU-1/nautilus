@@ -115,6 +115,9 @@
 #ifdef NAUT_CONFIG_E1000E_PCI
 #include <dev/e1000e_pci.h>
 #endif
+#ifdef NAUT_CONFIG_RTL8139_PCI
+#include <dev/rtl8139_pci.h>
+#endif
 #ifdef NAUT_CONFIG_RAMDISK
 #include <dev/ramdisk.h>
 #endif
@@ -517,6 +520,10 @@ init (unsigned long mbd,
 
 #ifdef NAUT_CONFIG_E1000E_PCI
     e1000e_pci_init(naut);
+#endif
+
+    #ifdef NAUT_CONFIG_RTL8139_PCI
+    rtl8139_pci_init(naut);
 #endif
 
 #ifdef NAUT_CONFIG_NET_ETHERNET

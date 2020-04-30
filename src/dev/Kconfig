@@ -208,6 +208,22 @@ config DEBUG_E1000E_PCI
     help
       Turn on debug prints for the E1000E PCI driver
 
+
+config RTL8139_PCI
+    bool "RTL8139 PCI NIC Driver"
+    depends on X86_64_HOST
+    default n
+    help
+      Adds the RTL8139 PCI network interface driver
+
+
+config DEBUG_/RTL8139_PCI
+    bool "Debug RTL8139 PCI"
+    depends on DEBUG_PRINTS && RTL8139_PCI
+    default n
+    help
+      Turn on debug prints for the RTL8139 PCI driver
+
 config MLX3_PCI
     bool "Mellanox ConnectX-3 PCI Driver"
     depends on X86_64_HOST
