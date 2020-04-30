@@ -1,0 +1,1 @@
+#define NAUT_CONFIG_VIRTIO_NET 1
