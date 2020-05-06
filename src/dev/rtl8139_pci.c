@@ -116,7 +116,7 @@ int rtl8139_pci_init(struct naut_info * naut)
 
 memset(s, 0, sizeof(*s));
 
-   nk_net_dev_register("TheFakeRTL8139", 0, &ops, (void *)s);
+nk_net_dev_register("TheFakeRTL8139", 0, &ops, (void *)s);
 
 
  //  list_for_each(curbus,&(pci->bus_list)) {
