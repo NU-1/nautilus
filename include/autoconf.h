@@ -1,7 +1,7 @@
 /*
  * Automatically generated C config: don't edit
  * Nautilus version: 
- * Thu Apr 30 11:00:37 2020
+ * Tue May  5 23:07:06 2020
  */
 #define AUTOCONF_INCLUDED
 
@@ -180,7 +180,7 @@
 #define NAUT_CONFIG_E1000E_PCI 1
 #define NAUT_CONFIG_DEBUG_E1000E_PCI 1
 #define NAUT_CONFIG_RTL8139_PCI 1
-#undef NAUT_CONFIG_DEBUG_/RTL8139_PCI
+#undef NAUT_CONFIG_DEBUG_RTL8139_PCI
 #undef NAUT_CONFIG_MLX3_PCI
 #undef NAUT_CONFIG_RAMDISK
 #define NAUT_CONFIG_ATA 1
