@@ -37,10 +37,10 @@
 #include <nautilus/timer.h>           // nk_sleep(ns);
 #include <nautilus/cpu.h>             // udelay
 
-#ifndef NAUT_CONFIG_DEBUG_RTL8139_PCI
-#undef DEBUG_PRINT
-#define DEBUG_PRINT(fmt, args...)
-#endif
+// #ifndef NAUT_CONFIG_DEBUG_RTL8139_PCI
+// #undef DEBUG_PRINT
+// #define DEBUG_PRINT(fmt, args...)
+// #endif
 
 #define INFO(fmt, args...)     INFO_PRINT("rtl8139_pci: " fmt, ##args)
 #define DEBUG(fmt, args...)    DEBUG_PRINT("rtl8139_pci: " fmt, ##args)
@@ -108,15 +108,15 @@ int rtl8139_pci_init(struct naut_info * naut)
 
 
 
-   struct rtl8139_state *s = malloc(sizeof(*s));
-   if (!s){
-   	ERROR("Can't alloc\n");
-   	return -1;
-   }
+	struct rtl8139_state *s = malloc(sizeof(*s));
+	if (!s){
+		ERROR("Can't alloc\n");
+		return -1;
+	}
 
-memset(s, 0, sizeof(*s));
+	memset(s, 0, sizeof(*s));
 
-nk_net_dev_register("TheFakeRTL8139", 0, &ops, (void *)s);
+	nk_net_dev_register("TheFakeRTL8139", 0, &ops, (void *)s);
 
 
  //  list_for_each(curbus,&(pci->bus_list)) {
