@@ -52,6 +52,10 @@
 #define READ_MEM64(d, o)       (*((volatile uint64_t*)((d)->mem_start + (o))))
 #define WRITE_MEM64(d, o, v)     ((*((volatile uint64_t*)(((d)->mem_start)+(o))))=(v))
 
+// PCI CONFIG SPACE ************************************
+#define REALTEK_VENDOR_ID               0x10ec
+#define RTL8139_DEVICE_ID              	0x8139
+
 /* Symbolic offsets to registers. */
 enum RTL8139_registers {
 	MAC0		= 0,	 /* Ethernet hardware address. */
@@ -328,21 +332,25 @@ int rtl8139_pci_init(struct naut_info * naut)
 	nk_net_dev_register("TheFakeRTL8139", 0, &ops, (void *)s);
 
 
- //  list_for_each(curbus,&(pci->bus_list)) {
- //    struct pci_bus *bus = list_entry(curbus,struct pci_bus,bus_node);
+  list_for_each(curbus,&(pci->bus_list)) {
+    struct pci_bus *bus = list_entry(curbus,struct pci_bus,bus_node);
 
- //    DEBUG("Searching PCI bus %u for RTL8139 devices\n", bus->num);
+    DEBUG("Searching PCI bus %u for RTL8139 devices\n", bus->num);
 
- //    list_for_each(curdev, &(bus->dev_list)) {
- //      struct pci_dev *pdev = list_entry(curdev,struct pci_dev,dev_node);
- //      struct pci_cfg_space *cfg = &pdev->cfg;
+    list_for_each(curdev, &(bus->dev_list)) {
+      struct pci_dev *pdev = list_entry(curdev,struct pci_dev,dev_node);
+      struct pci_cfg_space *cfg = &pdev->cfg;
 
- //      DEBUG("Device %u is a 0x%x:0x%x\n", pdev->num, cfg->vendor_id, cfg->device_id);
- //      // intel vendor id and e1000e device id
- //      if (cfg->vendor_id==INTEL_VENDOR_ID && cfg->device_id==E1000E_DEVICE_ID) {
-	// int foundio=0, foundmem=0;
+      DEBUG("Device %u is a 0x%x:0x%x\n", pdev->num, cfg->vendor_id, cfg->device_id);
+      // intel vendor id and e1000e device id
+      if (cfg->vendor_id==REALTEK_VENDOR_ID && cfg->device_id==RTL8139_DEVICE_ID) {
+		int foundio=0, foundmem=0;
+        DEBUG("Found RTL8139 Device :)\n");
+	  }
+	}
+  }
+
 	
- //        DEBUG("Found E1000E Device\n");
  //        struct e1000e_state *state = malloc(sizeof(struct e1000e_state));
 	
  //        if (!state) {
