@@ -46,8 +46,14 @@
 #define DEBUG(fmt, args...)    DEBUG_PRINT("rtl8139_pci: " fmt, ##args)
 #define ERROR(fmt, args...)    ERROR_PRINT("rtl8139_pci: " fmt, ##args)
 
-#define READ_MEM(d, o)         (*((volatile uint32_t*)(((d)->mem_start)+(o))))
-#define WRITE_MEM(d, o, v)     ((*((volatile uint32_t*)(((d)->mem_start)+(o))))=(v))
+#define READ_MEM8(d, o)         (*((volatile uint8_t*)(((d)->mem_start)+(o))))
+#define WRITE_MEM8(d, o, v)     ((*((volatile uint8_t*)(((d)->mem_start)+(o))))=(v))
+
+#define READ_MEM16(d, o)         (*((volatile uint16_t*)(((d)->mem_start)+(o))))
+#define WRITE_MEM16(d, o, v)     ((*((volatile uint16_t*)(((d)->mem_start)+(o))))=(v))
+
+#define READ_MEM32(d, o)         (*((volatile uint32_t*)(((d)->mem_start)+(o))))
+#define WRITE_MEM32(d, o, v)     ((*((volatile uint32_t*)(((d)->mem_start)+(o))))=(v))
 
 #define READ_MEM64(d, o)       (*((volatile uint64_t*)((d)->mem_start + (o))))
 #define WRITE_MEM64(d, o, v)     ((*((volatile uint64_t*)(((d)->mem_start)+(o))))=(v))
@@ -55,6 +61,17 @@
 // PCI CONFIG SPACE ************************************
 #define REALTEK_VENDOR_ID               0x10ec
 #define RTL8139_DEVICE_ID              	0x8139
+#define PCI_CMD_OFFSET         0x4    // Device Control - RW
+#define PCI_STATUS_OFFSET      0x6    // Device Status - RO
+
+// PCI command register
+#define PCI_CMD_IO_ACCESS_EN   1       // io access enable
+#define PCI_CMD_MEM_ACCESS_EN  (1<<1)  // memory access enable
+#define PCI_CMD_LANRW_EN       (1<<2)  // enable mastering lan r/w
+#define PCI_CMD_INT_DISABLE    (1<<10) // legacy interrupt disable when set
+
+// PCI status register
+#define PCI_STATUS_INT         (1<<3)
 
 struct rtl8139_state {
   // a pointer to the base class
@@ -483,6 +500,51 @@ int rtl8139_pci_init(struct naut_info * naut)
 			ERROR("init fn: ignoring device %s as it has no memory access method\n",state->name);
 			continue;
 		}
+
+		uint16_t pci_cmd = PCI_CMD_MEM_ACCESS_EN | PCI_CMD_IO_ACCESS_EN | PCI_CMD_LANRW_EN; // | E1000E_PCI_CMD_INT_DISABLE;
+        DEBUG("init fn: new pci cmd: 0x%04x\n", pci_cmd);
+        pci_cfg_writew(bus->num,pdev->num,0, PCI_CMD_OFFSET, pci_cmd);
+        DEBUG("init fn: pci_cmd 0x%04x expects 0x%04x\n",
+              pci_cfg_readw(bus->num,pdev->num, 0, PCI_CMD_OFFSET),
+              pci_cmd);
+        DEBUG("init fn: pci status 0x%04x\n",
+              pci_cfg_readw(bus->num,pdev->num, 0, PCI_STATUS_OFFSET));
+
+		// disable interrupts? (both 3c and 5c)
+		// disable interrupts
+		WRITE_MEM16(state, IntrMask, 0x0000);
+		DEBUG("init fn: device reset\n");
+		WRITE_MEM8(state, Config1, 0);
+		udelay(10);
+		DEBUG("%x\n", READ_MEM8(state, ChipCmd));
+		WRITE_MEM8(state, ChipCmd, TxStatus0);
+		DEBUG("%d\n", READ_MEM8(state, ChipCmd));
+		// delay about 5 us (manual suggests 1us)		
+
+		/* Check that the chip has finished the reset. */
+		// int i = 0;
+		// for (i = 100000000; i > 0; i--) {
+		// 	// barrier();
+		// 	if ((READ_MEM8 (state, ChipCmd) & CmdReset) == 0)
+		// 		break;
+		// 	udelay (10);
+		// }
+				uint16_t mac_address = READ_MEM64(state, MAC0);
+		DEBUG("mac address of our card thingy; %x\n", mac_address);
+		while((READ_MEM8(state, ChipCmd) & 0x10) != 0){
+			// DEBUG("%d\n", READ_MEM32(state, ChipCmd));
+		}
+			DEBUG("%d\n", READ_MEM8(state, ChipCmd));
+
+		// udelay(RESTART_DELAY);
+		// disable interrupts again after reset
+		WRITE_MEM16(state, IntrMask, 0x0000);
+		DEBUG("init fn: interrupts disables after reset\n");
+
+
+
+
+		// re-enable interrupts (both 3c and 5c)
 	  }
 	}
   }
