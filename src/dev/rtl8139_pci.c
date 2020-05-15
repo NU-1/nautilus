@@ -73,6 +73,9 @@
 // PCI status register
 #define PCI_STATUS_INT         (1<<3)
 
+// buffer size
+#define RECEIVE_BUFFER_SIZE  	(8192 + 16) 
+
 struct rtl8139_state {
   // a pointer to the base class
   struct nk_net_dev *netdev;
@@ -97,9 +100,9 @@ struct rtl8139_state {
 //   // a circular queue mapping between callback function and tx descriptor
 //   struct e1000e_map_ring *tx_map;
 //   // a circular queue mapping between callback funtion and rx descriptor
-//   struct e1000e_map_ring *rx_map;
+  uint32_t 	rec_buf_addr;
 //   // the size of receive buffers
-//   uint64_t rx_buffer_size;
+  uint64_t 	rec_buf_size;
 //   // interrupt mark set
 //   uint32_t ims_reg;
 
@@ -483,15 +486,6 @@ int rtl8139_pci_init(struct naut_info * naut)
         DEBUG("init fn: pci status 0x%04x\n",
               pci_cfg_readw(bus->num,pdev->num, 0, PCI_STATUS_OFFSET));
 
-		// uint16_t pci_cmd = E1000E_PCI_CMD_MEM_ACCESS_EN | E1000E_PCI_CMD_IO_ACCESS_EN | E1000E_PCI_CMD_LANRW_EN; // | E1000E_PCI_CMD_INT_DISABLE;
-        // DEBUG("init fn: new pci cmd: 0x%04x\n", pci_cmd);
-        // pci_cfg_writew(bus->num,pdev->num,0,E1000E_PCI_CMD_OFFSET, pci_cmd);
-        // DEBUG("init fn: pci_cmd 0x%04x expects 0x%04x\n",
-        //       pci_cfg_readw(bus->num,pdev->num, 0, E1000E_PCI_CMD_OFFSET),
-        //       pci_cmd);
-        // DEBUG("init fn: pci status 0x%04x\n",
-        //       pci_cfg_readw(bus->num,pdev->num, 0, E1000E_PCI_STATUS_OFFSET));
-	
         list_add(&dev_list, &state->node);
         sprintf(state->name, "rtl8139-%d", num);
         num++;
@@ -514,40 +508,50 @@ int rtl8139_pci_init(struct naut_info * naut)
 
 		// disable interrupts? (both 3c and 5c)
 		// disable interrupts
-		// int16_t mac_address = READ_MEM64(state, MAC0);
-		WRITE_MEM16(state, IntrMask, 0x0000);
+		uint32_t mac_address0 = READ_MEM32(state, MAC0);
+		DEBUG("higher address of our card thingy; %x\n", mac_address0);
+
+		uint32_t mac_address1 = READ_MEM32(state, MAC0 + 4);
+		DEBUG("lower address of our card thingy; %x\n", mac_address1);
+
+		uint64_t mac_address = (((uint64_t)mac_address0)+(((uint64_t)mac_address1)<<32));
+		DEBUG("mac address of our card thingy; 0x%lX\n", mac_address);
+
 		DEBUG("init fn: device reset\n");
 		WRITE_MEM8(state, Config1, 0);
 		udelay(10);
-		DEBUG("%x\n", READ_MEM8(state, ChipCmd));
-		WRITE_MEM8(state, ChipCmd, TxStatus0);
-		DEBUG("%d\n", READ_MEM8(state, ChipCmd));
-		// delay about 5 us (manual suggests 1us)		
+		WRITE_MEM8(state, ChipCmd, CmdReset);		
+		while((READ_MEM8(state, ChipCmd) & 0x10) != 0);
 
-		/* Check that the chip has finished the reset. */
-		// int i = 0;
-		// for (i = 100000000; i > 0; i--) {
-		// 	// barrier();
-		// 	if ((READ_MEM8 (state, ChipCmd) & CmdReset) == 0)
-		// 		break;
-		// 	udelay (10);
-		// }
-				uint16_t mac_address = READ_MEM64(state, MAC0);
-		DEBUG("mac address of our card thingy; %x\n", mac_address);
-		while((READ_MEM8(state, ChipCmd) & 0x10) != 0){
-			// DEBUG("%d\n", READ_MEM32(state, ChipCmd));
-		}
-			DEBUG("%d\n", READ_MEM8(state, ChipCmd));
+		// set up receive buffer; get its address and save it
+  		state->rec_buf_addr = (uint32_t) malloc(rec_buf_size);
+		state->rec_buf_size = RECEIVE_BUFFER_SIZE;
 
-		// udelay(RESTART_DELAY);
-		// disable interrupts again after reset
-		WRITE_MEM16(state, IntrMask, 0x0000);
+		// write write the receive buffer address
+		WRITE_MEM32(state, RxBuf, state->rec_buf_addr);
+		
+		// set up the interrupt mask
 		DEBUG("init fn: interrupts disables after reset\n");
+		WRITE_MEM16(state, IntrMask, 0x0005);
 
+		// set up whatever packet types we want to receive
+		// this is a "run mode"
+		// we choose: "accept physical match," which are packets sent to our own mac address
+		// we also tell it the buffer size
+		// we do this in the rcr register, by unsetting bits 11 and 12 and 7 and setting bit 1
+		uint32_t rcr_val = READ_MEM32(state, RxConfig)
+		// setting bit 1 to accept physical match packets to mac address
+		rcr_val |= 0x2;
+		// unsetting bits 11 and 12 to tell it that the page size is 8192 + 16
+		rcr_val &= ~(0x3 << 11);
+		// unsetting bit 7 to tell it to wrap around the ring buffere (not assume that there is extra space after)
+		rcr_val &= ~(0x1 << 7);
+		WRITE_MEM32(state, RxConfig, rcr_val);
 
+		// enable receive and transmit
+		WRITE_MEM8(state, ChipCmd, 0xc);
 
-
-		// re-enable interrupts (both 3c and 5c)
+		// done initializing device?  woop-dee-doo
 	  }
 	}
   }
