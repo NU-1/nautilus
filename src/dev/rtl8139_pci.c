@@ -514,23 +514,33 @@ int rtl8139_pci_init(struct naut_info * naut)
 
 		// disable interrupts? (both 3c and 5c)
 		// disable interrupts
-		uint32_t mac_address0 = READ_MEM32(state, MAC0);
-		DEBUG("higher address of our card thingy; %x\n", mac_address0);
-
-		uint32_t mac_address1 = READ_MEM32(state, MAC0 + 4);
-		DEBUG("lower address of our card thingy; %x\n", mac_address1);
-
-		uint64_t mac_address = (((uint64_t)mac_address0)+(((uint64_t)mac_address1)<<32));
-		DEBUG("mac address of our card thingy; 0x%lX\n", mac_address);
-
+		// int16_t mac_address = READ_MEM64(state, MAC0);
 		WRITE_MEM16(state, IntrMask, 0x0000);
 		DEBUG("init fn: device reset\n");
 		WRITE_MEM8(state, Config1, 0);
 		udelay(10);
-		WRITE_MEM8(state, ChipCmd, CmdReset);		
-		while((READ_MEM8(state, ChipCmd) & 0x10) != 0);
+		DEBUG("%x\n", READ_MEM8(state, ChipCmd));
+		WRITE_MEM8(state, ChipCmd, TxStatus0);
+		DEBUG("%d\n", READ_MEM8(state, ChipCmd));
+		// delay about 5 us (manual suggests 1us)		
 
+		/* Check that the chip has finished the reset. */
+		// int i = 0;
+		// for (i = 100000000; i > 0; i--) {
+		// 	// barrier();
+		// 	if ((READ_MEM8 (state, ChipCmd) & CmdReset) == 0)
+		// 		break;
+		// 	udelay (10);
+		// }
+				uint16_t mac_address = READ_MEM64(state, MAC0);
+		DEBUG("mac address of our card thingy; %x\n", mac_address);
+		while((READ_MEM8(state, ChipCmd) & 0x10) != 0){
+			// DEBUG("%d\n", READ_MEM32(state, ChipCmd));
+		}
+			DEBUG("%d\n", READ_MEM8(state, ChipCmd));
 
+		// udelay(RESTART_DELAY);
+		// disable interrupts again after reset
 		WRITE_MEM16(state, IntrMask, 0x0000);
 		DEBUG("init fn: interrupts disables after reset\n");
 
