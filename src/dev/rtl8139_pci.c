@@ -81,6 +81,8 @@ struct rtl8139_state {
   struct nk_net_dev *netdev;
   // pci interrupt and interupt vector
   struct pci_dev *pci_dev;
+  uint8_t   pci_intr;  // IRQ number on bus
+  uint8_t   intr_vec;  // IRQ we will see
 
   // our device list
   struct list_head node;
@@ -357,6 +359,95 @@ static struct nk_net_dev_int ops = {
 };
 
 
+static int rtl8139_irq_handler(excp_entry_t * excp, excp_vec_t vec, void *s) 
+{
+  DEBUG("rtl8139_irq_handler fn vector: 0x%x rip: 0x%p\n", vec, excp->rip);
+
+  struct rtl8139_state* state = (struct rtl8139_state *)s;
+
+  uint16_t isr = READ_MEM16(state, IntrStatus);
+  DEBUG("Interrupt Status: %x", isr);
+
+  //e1000 code
+//   uint32_t ims = READ_MEM(state, E1000_IMS_OFFSET);
+//   uint32_t mask_int = icr & ims;
+//   DEBUG("ICR: 0x%08x IMS: 0x%08x mask_int: 0x%08x\n", icr, ims, mask_int);
+//   DEBUG("ICR: 0x%08x icr should be zero.\n",
+//         READ_MEM(state, E1000_ICR_OFFSET));
+  
+  void (*callback)(nk_net_dev_status_t, void*) = NULL;
+  void *context = NULL;
+  nk_net_dev_status_t status = NK_NET_DEV_STATUS_SUCCESS;
+  
+  if(isr & 0xC) {
+    // transmit interrupt ERROR or OK
+    DEBUG("Handle Transmit Interrupt\n");
+
+	if (isr & 0x8){
+		DEBUG("RTL8139 Transmit Handler Error");
+	}
+
+	if (isr & 0x4){
+		DEBUG("RTL8139 Transmit Handler OK");
+	}
+
+    // e1000_unmap_callback(state->tx_map, (uint64_t **)&callback, (void **)&context);
+    // // if there is an error while sending a packet, set the error status
+    // if(TXD_STATUS(TXD_PREV_HEAD).ec || TXD_STATUS(TXD_PREV_HEAD).lc) {
+    //   ERROR("transmit errors\n");
+    //   status = NK_NET_DEV_STATUS_ERROR;
+    // }
+
+    // // update the head of the ring buffer
+    // TXD_PREV_HEAD = TXD_INC(1, TXD_PREV_HEAD);
+    // DEBUG("total packet transmitted = %d\n",
+    //       READ_MEM(state, E1000_TPT_OFFSET));    
+  }
+  
+  if (isr & 0x3){
+    // receive interrupt ERROR or OK
+    DEBUG("Handle Receive Interrupt\n");
+
+
+	if(isr & 0x2){
+		DEBUG("RTL8139 Receive Handler Error");
+	}
+
+	if(isr & 0x1){
+		DEBUG("RTL8139 Receive Handler OK");
+	}
+
+    // e1000_unmap_callback(state->rx_map, (uint64_t **)&callback, (void **)&context);
+    // // checking errors
+    // if(RXD_ERRORS(RXD_PREV_HEAD)) {
+    //   ERROR("receive an error packet\n");
+    //   status = NK_NET_DEV_STATUS_ERROR;
+    // }
+    // DEBUG("RDLEN=0x%08x, RDH=0x%08x, RDT=0x%08x, RCTL=0x%08x\n",
+	// 	    READ_MEM(state, RDLEN_OFFSET),
+	// 	    READ_MEM(state, RDH_OFFSET),
+	// 	    READ_MEM(state, RDT_OFFSET),
+	// 	    READ_MEM(state, RCTL_OFFSET));
+    
+    // // in the irq, update only the head of the buffer
+    // RXD_PREV_HEAD = RXD_INC(1, RXD_PREV_HEAD);    
+    // DEBUG("total packet received = %d\n",
+    //       READ_MEM(state, E1000_TPR_OFFSET));
+  }
+
+//   if(callback) {
+//     DEBUG("invoke callback function callback: 0x%p\n", callback);
+//     callback(status, context);
+//   }
+
+  DEBUG("end irq\n\n\n");
+  // must have this line at the end of the handler
+  IRQ_HANDLER_END();
+  return 0;
+}
+
+
+
 int rtl8139_pci_init(struct naut_info * naut)
 {
   struct pci_info *pci = naut->sys.pci;
@@ -524,7 +615,7 @@ int rtl8139_pci_init(struct naut_info * naut)
 		while((READ_MEM8(state, ChipCmd) & 0x10) != 0);
 
 		// set up receive buffer; get its address and save it
-  		state->rec_buf_addr = (uint32_t) malloc(rec_buf_size);
+  		state->rec_buf_addr = (uint32_t) malloc(state->rec_buf_size);
 		state->rec_buf_size = RECEIVE_BUFFER_SIZE;
 
 		// write write the receive buffer address
@@ -534,12 +625,13 @@ int rtl8139_pci_init(struct naut_info * naut)
 		DEBUG("init fn: interrupts disables after reset\n");
 		WRITE_MEM16(state, IntrMask, 0x0005);
 
+
 		// set up whatever packet types we want to receive
 		// this is a "run mode"
 		// we choose: "accept physical match," which are packets sent to our own mac address
 		// we also tell it the buffer size
 		// we do this in the rcr register, by unsetting bits 11 and 12 and 7 and setting bit 1
-		uint32_t rcr_val = READ_MEM32(state, RxConfig)
+		uint32_t rcr_val = READ_MEM32(state, RxConfig);
 		// setting bit 1 to accept physical match packets to mac address
 		rcr_val |= 0x2;
 		// unsetting bits 11 and 12 to tell it that the page size is 8192 + 16
@@ -550,8 +642,38 @@ int rtl8139_pci_init(struct naut_info * naut)
 
 		// enable receive and transmit
 		WRITE_MEM8(state, ChipCmd, 0xc);
-
+	
 		// done initializing device?  woop-dee-doo
+
+		//FINDING THE IRQ AND SETTING UP HANDLER
+
+			//enable all interrupts on the device
+			WRITE_MEM16(state, IntrMask, ~0);
+			
+			//enable interrupts to flow off the device
+			uint16_t old_cmd = pci_cfg_readw(bus->num,pdev->num,0,0x4);
+			DEBUG("Old PCI CMD: 0x%04x\n",old_cmd);
+
+			old_cmd |= 0x7;  // make sure bus master is enabled
+			old_cmd &= ~0x40;
+
+			DEBUG("New PCI CMD: 0x%04x\n",old_cmd);
+
+			pci_cfg_writew(bus->num,pdev->num,0,0x4,old_cmd);
+
+			// PCI Interrupt (A..D)
+			state->pci_intr = cfg->dev_cfg.intr_pin;
+
+			// GRUESOME HACK
+			state->intr_vec = -1;//map_pci_irq_to_vec(bus,pdev);
+
+			// register the interrupt handler
+			// register_irq_handler(state->intr_vec, rtl8139_irq_handler, state);
+			for (int i = 0; i < 256; i++){
+				nk_unmask_irq(i);		
+			}
+
+
 	  }
 	}
   }
