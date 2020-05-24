@@ -422,7 +422,7 @@ static int rtl8139_post_send(void *state,
 		uint64_t len,
 		void (*callback)(nk_net_dev_status_t status, void *context),
 		void *context){
-
+	DEBUG("RTL8139 Post Send\n");
 	//Do something with callback
 	uint8_t result;
 
