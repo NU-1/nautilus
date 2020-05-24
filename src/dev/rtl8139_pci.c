@@ -73,40 +73,53 @@
 // PCI status register
 #define PCI_STATUS_INT         (1<<3)
 
+// RTL8139 CONSTANTS
+
 // buffer size
 #define RECEIVE_BUFFER_SIZE  	(8192 + 16) 
 
+// Transmission Sizes
+#define MIN_TU 48
+#define MAX_TU 1792
+
+//IRQ
+#define RTL8139_IRQ 11
+
 struct rtl8139_state {
-  // a pointer to the base class
-  struct nk_net_dev *netdev;
-  // pci interrupt and interupt vector
-  struct pci_dev *pci_dev;
-  uint8_t   pci_intr;  // IRQ number on bus
-  uint8_t   intr_vec;  // IRQ we will see
+	// a pointer to the base class
+	struct nk_net_dev *netdev;
+	// pci interrupt and interupt vector
+	struct pci_dev *pci_dev;
+	uint8_t   pci_intr;  // IRQ number on bus
+	uint8_t   intr_vec;  // IRQ we will see
 
-  // our device list
-  struct list_head node;
+	// our device list
+	struct list_head node;
 
-    // Where registers are mapped into the I/O address space
-  uint16_t  ioport_start;
-  uint16_t  ioport_end;  
-  // Where registers are mapped into the physical memory address space
-  uint64_t  mem_start;
-  uint64_t  mem_end;
-    
-  char name[DEV_NAME_LEN];
-  uint8_t mac_addr[6];
+	// Where registers are mapped into the I/O address space
+	uint16_t  ioport_start;
+	uint16_t  ioport_end;
 
-//   struct e1000e_desc_ring *tx_ring;
-//   struct e1000e_desc_ring *rxd_ring;
-//   // a circular queue mapping between callback function and tx descriptor
-//   struct e1000e_map_ring *tx_map;
-//   // a circular queue mapping between callback funtion and rx descriptor
-  uint32_t 	rec_buf_addr;
-//   // the size of receive buffers
-  uint64_t 	rec_buf_size;
-//   // interrupt mark set
-//   uint32_t ims_reg;
+	// Where registers are mapped into the physical memory address space
+	uint64_t  mem_start;
+	uint64_t  mem_end;
+		
+	char name[DEV_NAME_LEN];
+	uint8_t mac_addr[6];
+
+	//   struct e1000e_desc_ring *tx_ring;
+	//   struct e1000e_desc_ring *rxd_ring;
+	//   // a circular queue mapping between callback function and tx descriptor
+	//   struct e1000e_map_ring *tx_map;
+	//   // a circular queue mapping between callback funtion and rx descriptor
+	uint32_t 	rec_buf_addr;
+	//   // the size of receive buffers
+	uint64_t 	rec_buf_size;
+	//   // interrupt mark set
+	//   uint32_t ims_reg;
+
+	//Transmit Pair Counter for selection of rotating transmit register pairs
+	uint64_t	TRCounter;
 
 #if TIMING
   volatile iteration_t measure;
@@ -328,12 +341,48 @@ enum chip_flags {
 	HasLWake	= (1 << 1),
 };
 
+uint64_t e1000rtl_packet_size_to_buffer_size(uint64_t sz) 
+{
+  // Round up the number to the buffer size with power of two
+  // In E1000, the packet buffer is the power of two.
+  // citation: https://graphics.stanford.edu/~seander/bithacks.html#RoundUpPowerOf2
+  sz--;
+  sz |= sz >> 1;
+  sz |= sz >> 2;
+  sz |= sz >> 4;
+  sz |= sz >> 8;
+  sz |= sz >> 16;
+  sz |= sz >> 32;  
+  sz++;
+  // if the size is larger than the maximun buffer size, return the largest size.
+  if(sz >= RECEIVE_BUFFER_SIZE) {
+    return RECEIVE_BUFFER_SIZE;
+  } else {
+    return sz;
+  }
+}
+
 // netdev-specific interface - set to zero if not available
 // an interface either succeeds (returns zero) or fails (returns -1)
 static int rtl8139_get_characteristics(void *state, struct nk_net_dev_characteristics *c){
 
-	ERROR("unimplemented\n");
-	return -1;
+	if(!state){
+		ERROR("Device pointer is NULL\n");
+	}
+
+	if (!c){
+		ERROR("Charateristics pointer is NULL\n");
+	}
+
+	
+	struct rtl8139_state *rtl_state = (struct rtl8139_state*) state;
+	memcpy(c->mac, (void *) rtl_state->mac_addr, ETHER_MAC_LEN);
+	// minimum and the maximum transmission unit
+	c->min_tu = MIN_TU; 
+	c->max_tu = MAX_TU;
+  	c->packet_size_to_buffer_size = e1000rtl_packet_size_to_buffer_size;
+
+	return 0;
 }
 
 // send/receive are non-blocking always.  -1 on error, otherwise return 0
@@ -344,10 +393,43 @@ static int rtl8139_post_receive(void *state, uint8_t *dest, uint64_t len, void (
 	return -1;
 }
 
-static int rtl8139_post_send(void *state, uint8_t *src, uint64_t len, void (*callback)(nk_net_dev_status_t status, void *context), void *context){
+static int rtl8139_send(struct rtl8139_state* state, uint8_t *packetAddr, uint64_t packetLen){
+	//POTENTIAL ISSUE
+	//WE WRITE TO ALL 4 REGISTER PAIRS VERY QUICKLY AND CYCLE BACK
+	//BEFORE DMA IS COMPLETE
+	//what do we do?
 
-	ERROR("unimplemented\n");
-	return -1;
+	//check for packet size
+	if (packetLen > MAX_TU){
+		ERROR("RTL8139 Send Packet: Packet is too large\n");
+	}
+
+	//determine which transmit register pair to use
+	uint8_t entry = state->TRCounter % 4;
+
+	//Write address of packet to address register
+	WRITE_MEM32(state, TxAddr0 + entry * 4, (uint32_t) packetAddr);
+
+	//write status register
+	uint32_t TxStatusTemp = packetLen & 0x1fff;
+	WRITE_MEM32(state, TxStatus0 + entry * 4, TxStatusTemp);
+
+	return 0;
+}
+
+static int rtl8139_post_send(void *state,
+		uint8_t *src,
+		uint64_t len,
+		void (*callback)(nk_net_dev_status_t status, void *context),
+		void *context){
+
+	//Do something with callback
+	uint8_t result;
+
+	//if callback successful
+	result = rtl8139_send((struct rtl8139_state*) state, src, len);
+
+	return 0;
 }
 
 
@@ -361,12 +443,12 @@ static struct nk_net_dev_int ops = {
 
 static int rtl8139_irq_handler(excp_entry_t * excp, excp_vec_t vec, void *s) 
 {
-  DEBUG("rtl8139_irq_handler fn vector: 0x%x rip: 0x%p\n", vec, excp->rip);
+	DEBUG("rtl8139_irq_handler fn vector: 0x%x rip: 0x%p\n", vec, excp->rip);
 
-  struct rtl8139_state* state = (struct rtl8139_state *)s;
+	struct rtl8139_state* state = (struct rtl8139_state *)s;
 
-  uint16_t isr = READ_MEM16(state, IntrStatus);
-  DEBUG("Interrupt Status: %x", isr);
+	uint16_t isr = READ_MEM16(state, IntrStatus);
+	DEBUG("Interrupt Status: %x\n", isr);
 
   //e1000 code
 //   uint32_t ims = READ_MEM(state, E1000_IMS_OFFSET);
@@ -375,75 +457,78 @@ static int rtl8139_irq_handler(excp_entry_t * excp, excp_vec_t vec, void *s)
 //   DEBUG("ICR: 0x%08x icr should be zero.\n",
 //         READ_MEM(state, E1000_ICR_OFFSET));
   
-  void (*callback)(nk_net_dev_status_t, void*) = NULL;
-  void *context = NULL;
-  nk_net_dev_status_t status = NK_NET_DEV_STATUS_SUCCESS;
+	void (*callback)(nk_net_dev_status_t, void*) = NULL;
+	void *context = NULL;
+	nk_net_dev_status_t status = NK_NET_DEV_STATUS_SUCCESS;
+	
+	if(isr & 0xC) {
+		// transmit interrupt ERROR or OK
+		DEBUG("Handle Transmit Interrupt\n");
+
+		if (isr & 0x8){
+			DEBUG("RTL8139 Transmit Handler Error\n");
+		}
+
+		if (isr & 0x4){
+			DEBUG("RTL8139 Transmit Handler OK\n");
+		}
+
+		// e1000_unmap_callback(state->tx_map, (uint64_t **)&callback, (void **)&context);
+		// // if there is an error while sending a packet, set the error status
+		// if(TXD_STATUS(TXD_PREV_HEAD).ec || TXD_STATUS(TXD_PREV_HEAD).lc) {
+		//   ERROR("transmit errors\n");
+		//   status = NK_NET_DEV_STATUS_ERROR;
+		// }
+
+		// // update the head of the ring buffer
+		// TXD_PREV_HEAD = TXD_INC(1, TXD_PREV_HEAD);
+		// DEBUG("total packet transmitted = %d\n",
+		//       READ_MEM(state, E1000_TPT_OFFSET));    
+	}
   
-  if(isr & 0xC) {
-    // transmit interrupt ERROR or OK
-    DEBUG("Handle Transmit Interrupt\n");
+	if (isr & 0x3){
+		// receive interrupt ERROR or OK
+		DEBUG("Handle Receive Interrupt\n");
 
-	if (isr & 0x8){
-		DEBUG("RTL8139 Transmit Handler Error");
+
+		if(isr & 0x2){
+			DEBUG("RTL8139 Receive Handler Error\n");
+		}
+
+		if(isr & 0x1){
+			DEBUG("RTL8139 Receive Handler OK\n");
+		}
+
+		// e1000_unmap_callback(state->rx_map, (uint64_t **)&callback, (void **)&context);
+		// // checking errors
+		// if(RXD_ERRORS(RXD_PREV_HEAD)) {
+		//   ERROR("receive an error packet\n");
+		//   status = NK_NET_DEV_STATUS_ERROR;
+		// }
+		// DEBUG("RDLEN=0x%08x, RDH=0x%08x, RDT=0x%08x, RCTL=0x%08x\n",
+		// 	    READ_MEM(state, RDLEN_OFFSET),
+		// 	    READ_MEM(state, RDH_OFFSET),
+		// 	    READ_MEM(state, RDT_OFFSET),
+		// 	    READ_MEM(state, RCTL_OFFSET));
+		
+		// // in the irq, update only the head of the buffer
+		// RXD_PREV_HEAD = RXD_INC(1, RXD_PREV_HEAD);    
+		// DEBUG("total packet received = %d\n",
+		//       READ_MEM(state, E1000_TPR_OFFSET));
 	}
-
-	if (isr & 0x4){
-		DEBUG("RTL8139 Transmit Handler OK");
-	}
-
-    // e1000_unmap_callback(state->tx_map, (uint64_t **)&callback, (void **)&context);
-    // // if there is an error while sending a packet, set the error status
-    // if(TXD_STATUS(TXD_PREV_HEAD).ec || TXD_STATUS(TXD_PREV_HEAD).lc) {
-    //   ERROR("transmit errors\n");
-    //   status = NK_NET_DEV_STATUS_ERROR;
-    // }
-
-    // // update the head of the ring buffer
-    // TXD_PREV_HEAD = TXD_INC(1, TXD_PREV_HEAD);
-    // DEBUG("total packet transmitted = %d\n",
-    //       READ_MEM(state, E1000_TPT_OFFSET));    
-  }
-  
-  if (isr & 0x3){
-    // receive interrupt ERROR or OK
-    DEBUG("Handle Receive Interrupt\n");
-
-
-	if(isr & 0x2){
-		DEBUG("RTL8139 Receive Handler Error");
-	}
-
-	if(isr & 0x1){
-		DEBUG("RTL8139 Receive Handler OK");
-	}
-
-    // e1000_unmap_callback(state->rx_map, (uint64_t **)&callback, (void **)&context);
-    // // checking errors
-    // if(RXD_ERRORS(RXD_PREV_HEAD)) {
-    //   ERROR("receive an error packet\n");
-    //   status = NK_NET_DEV_STATUS_ERROR;
-    // }
-    // DEBUG("RDLEN=0x%08x, RDH=0x%08x, RDT=0x%08x, RCTL=0x%08x\n",
-	// 	    READ_MEM(state, RDLEN_OFFSET),
-	// 	    READ_MEM(state, RDH_OFFSET),
-	// 	    READ_MEM(state, RDT_OFFSET),
-	// 	    READ_MEM(state, RCTL_OFFSET));
-    
-    // // in the irq, update only the head of the buffer
-    // RXD_PREV_HEAD = RXD_INC(1, RXD_PREV_HEAD);    
-    // DEBUG("total packet received = %d\n",
-    //       READ_MEM(state, E1000_TPR_OFFSET));
-  }
 
 //   if(callback) {
 //     DEBUG("invoke callback function callback: 0x%p\n", callback);
 //     callback(status, context);
 //   }
+	//reset ISR to 0 for QEMU
+	// isr &= 0xfff0; // clear T/R ERR/OK bits
+	// WRITE_MEM16(state, IntrStatus, isr);
 
-  DEBUG("end irq\n\n\n");
-  // must have this line at the end of the handler
-  IRQ_HANDLER_END();
-  return 0;
+	DEBUG("end irq\n\n\n");
+	// must have this line at the end of the handler
+	IRQ_HANDLER_END();
+	return 0;
 }
 
 
@@ -665,15 +750,32 @@ int rtl8139_pci_init(struct naut_info * naut)
 			state->pci_intr = cfg->dev_cfg.intr_pin;
 
 			// GRUESOME HACK
-			state->intr_vec = -1;//map_pci_irq_to_vec(bus,pdev);
+			state->intr_vec = RTL8139_IRQ;
 
 			// register the interrupt handler
-			// register_irq_handler(state->intr_vec, rtl8139_irq_handler, state);
+			register_irq_handler(state->intr_vec, rtl8139_irq_handler, state);
 			for (int i = 0; i < 256; i++){
 				nk_unmask_irq(i);		
 			}
+			DEBUG("Finished initing rtl8139\n");
+			
+			//Create Ethernet Packet for testing
+			uint8_t p[64];
+			memset(p,0,64);
 
+			p[0]=p[1]=p[2]=p[3]=p[4]=p[5]=0xff;  // destination is broadcast address ff:ff:ff:ff:ff:ff
+			p[6]=1; p[7]=2; p[8]=3; p[9]=4; p[10]=5; p[11]=6; // src is 01:02:03:04:05:06
+			p[12]= 8; p[13]=0;  // type is IP (see  https://en.wikipedia.org/wiki/EtherType)
+			strcpy(&p[14],"Hello World");
 
+			//Write address of packet to address register
+			uint32_t t_p = (uint64_t) (void *) p & 0x00000000ffffffff;
+			WRITE_MEM32(state, TxAddr0, t_p);
+
+			//write status register
+			uint32_t TxStatusTemp = 0;//READ_MEM32(state, TxStatus0);
+			TxStatusTemp = 64;
+			WRITE_MEM32(state, TxStatus0, TxStatusTemp);
 	  }
 	}
   }
