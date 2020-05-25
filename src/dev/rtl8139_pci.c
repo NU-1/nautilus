@@ -750,10 +750,41 @@ int rtl8139_pci_init(struct naut_info * naut)
 			state->pci_intr = cfg->dev_cfg.intr_pin;
 
 			// GRUESOME HACK
-			state->intr_vec = RTL8139_IRQ;
+			// state->intr_vec = RTL8139_IRQ;
+
+			uint64_t num_vecs = pdev->msi.num_vectors_needed;
+			uint64_t base_vec = 0;
+
+			if (idt_find_and_reserve_range(num_vecs,1,&base_vec)) {
+				ERROR("Cannot find %d vectors for %s - skipping\n",num_vecs,state->name);
+				continue;
+			}
+
+			DEBUG("%s vectors are %d..%d\n",state->name,base_vec,base_vec+num_vecs-1);
+
+			if (pci_dev_enable_msi(pdev, base_vec, num_vecs, 0)) {
+				ERROR("Failed to enable MSI for device %s - skipping\n", state->name);
+				continue;
+			}
+
+			int i;
+			int failed=0;
+
+			for (i=base_vec;i<(base_vec+num_vecs);i++) {
+				if (register_int_handler(i, rtl8139_irq_handler, state)) {
+				ERROR("Failed to register handler for vector %d on device %s - skipping\n",i,state->name);
+				failed=1;
+				break;
+				}
+			}
 
 			// register the interrupt handler
-			register_irq_handler(state->intr_vec, rtl8139_irq_handler, state);
+			 if (register_int_handler(i, rtl8139_irq_handler, state)) {
+				ERROR("Failed to register handler for vector %d on device %s - skipping\n",i,state->name);
+				failed=1;
+				break;
+	    	}
+			// register_irq_handler(state->intr_vec, rtl8139_irq_handler, state);
 			for (int i = 0; i < 256; i++){
 				nk_unmask_irq(i);		
 			}
