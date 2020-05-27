@@ -448,14 +448,7 @@ static int rtl8139_irq_handler(excp_entry_t * excp, excp_vec_t vec, void *s)
 	struct rtl8139_state* state = (struct rtl8139_state *)s;
 
 	uint16_t isr = READ_MEM16(state, IntrStatus);
-	DEBUG("Interrupt Status: %x\n", isr);
-
-  //e1000 code
-//   uint32_t ims = READ_MEM(state, E1000_IMS_OFFSET);
-//   uint32_t mask_int = icr & ims;
-//   DEBUG("ICR: 0x%08x IMS: 0x%08x mask_int: 0x%08x\n", icr, ims, mask_int);
-//   DEBUG("ICR: 0x%08x icr should be zero.\n",
-//         READ_MEM(state, E1000_ICR_OFFSET));
+	DEBUG("Interrupt Status: 0x%x\n", isr);
   
 	void (*callback)(nk_net_dev_status_t, void*) = NULL;
 	void *context = NULL;
@@ -464,6 +457,7 @@ static int rtl8139_irq_handler(excp_entry_t * excp, excp_vec_t vec, void *s)
 	if(isr & 0xC) {
 		// transmit interrupt ERROR or OK
 		DEBUG("Handle Transmit Interrupt\n");
+		DEBUG("TCR Register = %x\n", READ_MEM32(state, TxConfig));
 
 		if (isr & 0x8){
 			DEBUG("RTL8139 Transmit Handler Error\n");
@@ -472,18 +466,6 @@ static int rtl8139_irq_handler(excp_entry_t * excp, excp_vec_t vec, void *s)
 		if (isr & 0x4){
 			DEBUG("RTL8139 Transmit Handler OK\n");
 		}
-
-		// e1000_unmap_callback(state->tx_map, (uint64_t **)&callback, (void **)&context);
-		// // if there is an error while sending a packet, set the error status
-		// if(TXD_STATUS(TXD_PREV_HEAD).ec || TXD_STATUS(TXD_PREV_HEAD).lc) {
-		//   ERROR("transmit errors\n");
-		//   status = NK_NET_DEV_STATUS_ERROR;
-		// }
-
-		// // update the head of the ring buffer
-		// TXD_PREV_HEAD = TXD_INC(1, TXD_PREV_HEAD);
-		// DEBUG("total packet transmitted = %d\n",
-		//       READ_MEM(state, E1000_TPT_OFFSET));    
 	}
   
 	if (isr & 0x3){
@@ -499,31 +481,10 @@ static int rtl8139_irq_handler(excp_entry_t * excp, excp_vec_t vec, void *s)
 			DEBUG("RTL8139 Receive Handler OK\n");
 		}
 
-		// e1000_unmap_callback(state->rx_map, (uint64_t **)&callback, (void **)&context);
-		// // checking errors
-		// if(RXD_ERRORS(RXD_PREV_HEAD)) {
-		//   ERROR("receive an error packet\n");
-		//   status = NK_NET_DEV_STATUS_ERROR;
-		// }
-		// DEBUG("RDLEN=0x%08x, RDH=0x%08x, RDT=0x%08x, RCTL=0x%08x\n",
-		// 	    READ_MEM(state, RDLEN_OFFSET),
-		// 	    READ_MEM(state, RDH_OFFSET),
-		// 	    READ_MEM(state, RDT_OFFSET),
-		// 	    READ_MEM(state, RCTL_OFFSET));
-		
-		// // in the irq, update only the head of the buffer
-		// RXD_PREV_HEAD = RXD_INC(1, RXD_PREV_HEAD);    
-		// DEBUG("total packet received = %d\n",
-		//       READ_MEM(state, E1000_TPR_OFFSET));
 	}
 
-//   if(callback) {
-//     DEBUG("invoke callback function callback: 0x%p\n", callback);
-//     callback(status, context);
-//   }
-	//reset ISR to 0 for QEMU
-	// isr &= 0xfff0; // clear T/R ERR/OK bits
-	// WRITE_MEM16(state, IntrStatus, isr);
+	//WRITE_MEM16(state, IntrStatus, 1);
+	//DEBUG("Interrupt Status: 0x%x\n", READ_MEM16(state, IntrStatus));
 
 	DEBUG("end irq\n\n\n");
 	// must have this line at the end of the handler
@@ -752,47 +713,10 @@ int rtl8139_pci_init(struct naut_info * naut)
 			// GRUESOME HACK
 			state->intr_vec = RTL8139_IRQ;
 
-			// uint64_t num_vecs = pdev->msi.num_vectors_needed;
-			// uint64_t base_vec = 0;
-
-			// if (idt_find_and_reserve_range(num_vecs,1,&base_vec)) {
-			// 	ERROR("Cannot find %d vectors for %s - skipping\n",num_vecs,state->name);
-			// 	continue;
-			// }
-
-			// DEBUG("%s vectors are %d..%d\n",state->name,base_vec,base_vec+num_vecs-1);
-
-			// if (pci_dev_enable_msi(pdev, base_vec, num_vecs, 0)) {
-			// 	ERROR("Failed to enable MSI for device %s - skipping\n", state->name);
-			// 	continue;
-			// }
-
-			// int i;
-			// int failed=0;
-
-			// for (i=base_vec;i<(base_vec+num_vecs);i++) {
-			// 	if (register_int_handler(i, rtl8139_irq_handler, state)) {
-			// 		ERROR("Failed to register handler for vector %d on device %s - skipping\n",i,state->name);
-			// 		failed=1;
-			// 		break;
-			// 	}
-			// }
-
-			// register the interrupt handler
-			// if (!failed) { 
-			// 	for (i=base_vec; i<(base_vec+num_vecs);i++) {
-			// 		if (pci_dev_unmask_msi(pdev, i)) {
-			// 			ERROR("Failed to unmask interrupt %d for device %s\n",i,state->name);
-			// 			failed = 1;
-			// 			break;
-			// 		}
-			// 	}
-			// }
-
 			if (register_irq_handler(state->intr_vec, rtl8139_irq_handler, state)){
 				ERROR("RTL8139 IRQ Handler failed registration\n");
 			}
-			
+
 			for (int i = 0; i < 256; i++){
 				nk_unmask_irq(i);		
 			}
@@ -815,6 +739,10 @@ int rtl8139_pci_init(struct naut_info * naut)
 			uint32_t TxStatusTemp = 0;//READ_MEM32(state, TxStatus0);
 			TxStatusTemp = 64;
 			WRITE_MEM32(state, TxStatus0, TxStatusTemp);
+
+			udelay(10);
+			DEBUG("Interrupt Status: 0x%x\n", READ_MEM16(state, IntrStatus));
+
 	  }
 	}
   }
