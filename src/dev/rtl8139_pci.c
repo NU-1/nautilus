@@ -371,7 +371,7 @@ static int rtl8139_get_characteristics(void *state, struct nk_net_dev_characteri
 	}
 
 	if (!c){
-		ERROR("Charateristics pointer is NULL\n");
+		ERROR("Charateristics pointer is NULL\n"); 
 	}
 
 	
