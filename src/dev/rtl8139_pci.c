@@ -490,9 +490,9 @@ static int rtl8139_irq_handler(excp_entry_t * excp, excp_vec_t vec, void *s)
 
 	}
 
-	//WRITE_MEM16(state, IntrStatus, 1);
-	//WRITE_MEM16(state, IntrMask, 0x0003);
-	WRITE_MEM16(state, IntrStatus, 0x0000);
+	WRITE_MEM16(state, IntrStatus, 0x0004);
+	WRITE_MEM32(state, TxStatus0, 1<<13);//write only the OWN bit, clear everything else
+	WRITE_MEM32(state, TxAddr0, 0);//clear address
 	DEBUG("Interrupt Status: 0x%x\n", READ_MEM16(state, IntrStatus));
 	//WRITE_MEM16(state, IntrMask, 0x000f);
 
@@ -736,8 +736,8 @@ int rtl8139_pci_init(struct naut_info * naut)
 		// PCI Interrupt (A..D)
 		state->pci_intr = cfg->dev_cfg.intr_pin;
 
-		// GRUESOME HACK
-		state->intr_vec = RTL8139_IRQ;
+		//GRUESOME HACK
+		state->intr_vec = 11;
 
 		if (register_irq_handler(state->intr_vec, rtl8139_irq_handler, state)){
 			ERROR("RTL8139 IRQ Handler failed registration\n");
@@ -753,6 +753,7 @@ int rtl8139_pci_init(struct naut_info * naut)
 
 
 		if (ONCE){	
+			DEBUG("Testing Send\n");
 			ONCE = 0;
 			//Create Ethernet Packet for testing
 			uint8_t p[64];
@@ -766,11 +767,13 @@ int rtl8139_pci_init(struct naut_info * naut)
 			//Write address of packet to address register
 			uint32_t t_p = (uint64_t) (void *) p & 0x00000000ffffffff;
 			WRITE_MEM32(state, TxAddr0, t_p);
-
+			DEBUG("Address written\n");
 			//write status register
 			uint32_t TxStatusTemp = 0;//READ_MEM32(state, TxStatus0);
 			TxStatusTemp = 64;//size of ethernet packet
+			DEBUG("Sending Status Request\n");
 			WRITE_MEM32(state, TxStatus0, TxStatusTemp);
+			DEBUG("Send Complete\n");
 		}
 
 	  }
