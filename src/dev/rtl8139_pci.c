@@ -443,9 +443,16 @@ static struct nk_net_dev_int ops = {
 
 static int rtl8139_irq_handler(excp_entry_t * excp, excp_vec_t vec, void *s) 
 {
-	DEBUG("rtl8139_irq_handler fn vector: 0x%x rip: 0x%p\n", vec, excp->rip);
+	DEBUG("rtl8139_irq_handler fn vector: 0x%x rip: 0x%p\n\n", vec, excp->rip);
 
 	struct rtl8139_state* state = (struct rtl8139_state *)s;
+
+	for (int i = 0; i < 4; i++){
+		uint32_t TxTemp = READ_MEM32(state, TxStatus0 + i*4);
+		DEBUG("Pair %d Status = %x, Address = %x \n", i, TxTemp, READ_MEM32(state, TxAddr0 + i*4));
+		WRITE_MEM16(state, TxStatus0 + i*4, TxTemp | (1 << 12));
+	}
+	DEBUG("\n\n");
 
 	uint16_t isr = READ_MEM16(state, IntrStatus);
 	DEBUG("Interrupt Status: 0x%x\n", isr);
@@ -484,9 +491,12 @@ static int rtl8139_irq_handler(excp_entry_t * excp, excp_vec_t vec, void *s)
 	}
 
 	//WRITE_MEM16(state, IntrStatus, 1);
-	//DEBUG("Interrupt Status: 0x%x\n", READ_MEM16(state, IntrStatus));
+	//WRITE_MEM16(state, IntrMask, 0x0003);
+	WRITE_MEM16(state, IntrStatus, 0x0000);
+	DEBUG("Interrupt Status: 0x%x\n", READ_MEM16(state, IntrStatus));
+	//WRITE_MEM16(state, IntrMask, 0x000f);
 
-	DEBUG("end irq\n\n\n");
+	DEBUG("end irq\n\n");
 	// must have this line at the end of the handler
 	IRQ_HANDLER_END();
 	return 0;
@@ -496,20 +506,22 @@ static int rtl8139_irq_handler(excp_entry_t * excp, excp_vec_t vec, void *s)
 
 int rtl8139_pci_init(struct naut_info * naut)
 {
-  struct pci_info *pci = naut->sys.pci;
-  struct list_head *curbus, *curdev;
-  uint16_t num = 0;
+	int ONCE = 1;
 
-  INFO("init\n");
+	struct pci_info *pci = naut->sys.pci;
+	struct list_head *curbus, *curdev;
+	uint16_t num = 0;
 
-  // if (!pci) {
-  //   ERROR("No PCI info\n");
-  //   return -1;
-  // }
- 
-  // INIT_LIST_HEAD(&dev_list);
-  
-  DEBUG("Finding rtl8139 devices\n");
+	INFO("init\n");
+
+	// if (!pci) {
+	//   ERROR("No PCI info\n");
+	//   return -1;
+	// }
+	
+	// INIT_LIST_HEAD(&dev_list);
+	
+	DEBUG("Finding rtl8139 devices\n");
 
 
 
@@ -545,62 +557,64 @@ int rtl8139_pci_init(struct naut_info * naut)
           return -1;
         }
 
+		//zero the memory
         memset(state,0,sizeof(*state));
 	
 	// We will only support MSI for now
 
         // find out the bar for e1000e
         for (int i=0;i<6;i++) {
-          uint32_t bar = pci_cfg_readl(bus->num, pdev->num, 0, 0x10 + i*4);
-          uint32_t size;
-          DEBUG("bar %d: 0x%0x\n",i, bar);
-          // go through until the last one, and get out of the loop
-          if (bar==0) {
-            break;
-          }
-          // get the last bit and if it is zero, it is the memory
-          // " -------------------------"  one, it is the io
-          if (!(bar & 0x1)) {
-            uint8_t mem_bar_type = (bar & 0x6) >> 1;
-            if (mem_bar_type != 0) { // 64 bit address that we do not handle it
-              ERROR("Cannot handle memory bar type 0x%x\n", mem_bar_type);
-              return -1;
-            }
-          }
+			uint32_t bar = pci_cfg_readl(bus->num, pdev->num, 0, 0x10 + i*4);
+			uint32_t size;
+			DEBUG("bar %d: 0x%0x\n",i, bar);
+			// go through until the last one, and get out of the loop
+			if (bar==0) {
+				break;
+			}
+			// get the last bit and if it is zero, it is the memory
+			// " -------------------------"  one, it is the io
+			if (!(bar & 0x1)) {
+				uint8_t mem_bar_type = (bar & 0x6) >> 1;
+				if (mem_bar_type != 0) { // 64 bit address that we do not handle it
+					ERROR("Cannot handle memory bar type 0x%x\n", mem_bar_type);
+					return -1;
+				}
+			}
 
-          // determine size
-          // write all 1s, get back the size mask
-          pci_cfg_writel(bus->num, pdev->num, 0, 0x10 + i*4, 0xffffffff);
-          // size mask comes back + info bits
-          // write all ones and read back. if we get 00 (negative size), size = 4.
-          size = pci_cfg_readl(bus->num, pdev->num, 0, 0x10 + i*4);
+			// determine size
+			// write all 1s, get back the size mask
+			pci_cfg_writel(bus->num, pdev->num, 0, 0x10 + i*4, 0xffffffff);
 
-          // mask all but size mask
-          if (bar & 0x1) { // I/O
-            size &= 0xfffffffc;
-          } else { // memory
-            size &= 0xfffffff0;
-          }
-          // two complement, get back the positive size
-          size = ~size;
-          size++;
+			// size mask comes back + info bits
+			// write all ones and read back. if we get 00 (negative size), size = 4.
+			size = pci_cfg_readl(bus->num, pdev->num, 0, 0x10 + i*4);
 
-          // now we have to put back the original bar
-          pci_cfg_writel(bus->num, pdev->num, 0, 0x10 + i*4, bar);
+			// mask all but size mask
+			if (bar & 0x1) { // I/O
+				size &= 0xfffffffc;
+			} else { // memory
+				size &= 0xfffffff0;
+			}
+			// two complement, get back the positive size
+			size = ~size;
+			size++;
 
-          if (!size) { // size = 0 -> non-existent bar, skip to next one
-            continue;
-          }
+			// now we have to put back the original bar
+			pci_cfg_writel(bus->num, pdev->num, 0, 0x10 + i*4, bar);
 
-          uint32_t start = 0;
-          if (bar & 0x1) { // IO
-            start = state->ioport_start = bar & 0xffffffc0;
-            state->ioport_end = state->ioport_start + size;
-	    	foundio=1;
-          } else { // mem
-            start = state->mem_start = bar & 0xfffffff0;
-            state->mem_end = state->mem_start + size;
-	    	foundmem=1;
+			if (!size) { // size = 0 -> non-existent bar, skip to next one
+				continue;
+			}
+
+			uint32_t start = 0;
+			if (bar & 0x1) { // IO
+				start = state->ioport_start = bar & 0xffffffc0;
+				state->ioport_end = state->ioport_start + size;
+				foundio=1;
+			} else { // mem
+				start = state->mem_start = bar & 0xfffffff0;
+				state->mem_end = state->mem_start + size;
+				foundmem=1;
 		  }
 
           
@@ -643,33 +657,43 @@ int rtl8139_pci_init(struct naut_info * naut)
 
 
 
-		// disable interrupts? (both 3c and 5c)
-		// disable interrupts
+		// determine various relevant addresses
 		uint32_t mac_address0 = READ_MEM32(state, MAC0);
-		DEBUG("higher address of our card thingy; %x\n", mac_address0);
+		DEBUG("High addr; %x\n", mac_address0);
 
 		uint32_t mac_address1 = READ_MEM32(state, MAC0 + 4);
-		DEBUG("lower address of our card thingy; %x\n", mac_address1);
+		DEBUG("Low addr; %x\n", mac_address1);
 
 		uint64_t mac_address = (((uint64_t)mac_address0)+(((uint64_t)mac_address1)<<32));
-		DEBUG("mac address of our card thingy; 0x%lX\n", mac_address);
+		DEBUG("Mac addr; 0x%lX\n", mac_address);
 
-		DEBUG("init fn: device reset\n");
+		DEBUG("Device reset\n");
 		WRITE_MEM8(state, Config1, 0);
 		udelay(10);
 		WRITE_MEM8(state, ChipCmd, CmdReset);		
 		while((READ_MEM8(state, ChipCmd) & 0x10) != 0);
 
+
+
 		// set up receive buffer; get its address and save it
   		state->rec_buf_addr = (uint32_t) malloc(state->rec_buf_size);
 		state->rec_buf_size = RECEIVE_BUFFER_SIZE;
 
-		// write write the receive buffer address
+		// write the receive buffer address
 		WRITE_MEM32(state, RxBuf, state->rec_buf_addr);
-		
+
+		for (int i = 0; i < 4; i++){
+			uint32_t TxTemp = READ_MEM32(state, TxStatus0 + i*4);
+			DEBUG("Pair %d Status = %x, Address = %x \n", i, TxTemp, READ_MEM32(state, TxAddr0 + i*4));
+			WRITE_MEM16(state, TxStatus0 + i*4, TxTemp | (1 << 12));
+		}
+
+
 		// set up the interrupt mask
-		DEBUG("init fn: interrupts disables after reset\n");
-		WRITE_MEM16(state, IntrMask, 0x0005);
+		DEBUG("Enabling receive and transmit interrupts\n");
+		WRITE_MEM16(state, IntrMask, 0x000f);
+		DEBUG("Interrupt Mask Register = 0x%x\n", READ_MEM16(state, IntrMask));
+
 
 
 		// set up whatever packet types we want to receive
@@ -686,42 +710,50 @@ int rtl8139_pci_init(struct naut_info * naut)
 		rcr_val &= ~(0x1 << 7);
 		WRITE_MEM32(state, RxConfig, rcr_val);
 
+
+
 		// enable receive and transmit
 		WRITE_MEM8(state, ChipCmd, 0xc);
-	
-		// done initializing device?  woop-dee-doo
+		DEBUG("Command Register = 0x%x\n", READ_MEM8(state, ChipCmd));
 
-		//FINDING THE IRQ AND SETTING UP HANDLER
 
-			//enable all interrupts on the device
-			WRITE_MEM16(state, IntrMask, ~0);
-			
-			//enable interrupts to flow off the device
-			uint16_t old_cmd = pci_cfg_readw(bus->num,pdev->num,0,0x4);
-			DEBUG("Old PCI CMD: 0x%04x\n",old_cmd);
+		//Register Interrupt Handler
 
-			old_cmd |= 0x7;  // make sure bus master is enabled
-			old_cmd &= ~0x40;
+		// //enable all interrupts on the device
+		// WRITE_MEM16(state, IntrMask, 0xffff);
+		
+		//enable interrupts to flow off the device
+		uint16_t old_cmd = pci_cfg_readw(bus->num,pdev->num,0,0x4);
+		DEBUG("Old PCI CMD: 0x%04x\n",old_cmd);
 
-			DEBUG("New PCI CMD: 0x%04x\n",old_cmd);
+		old_cmd |= 0x7;  // make sure bus master is enabled
+		old_cmd &= ~0x40;
 
-			pci_cfg_writew(bus->num,pdev->num,0,0x4,old_cmd);
+		DEBUG("New PCI CMD: 0x%04x\n",old_cmd);
 
-			// PCI Interrupt (A..D)
-			state->pci_intr = cfg->dev_cfg.intr_pin;
+		pci_cfg_writew(bus->num,pdev->num,0,0x4,old_cmd);
 
-			// GRUESOME HACK
-			state->intr_vec = RTL8139_IRQ;
+		// PCI Interrupt (A..D)
+		state->pci_intr = cfg->dev_cfg.intr_pin;
 
-			if (register_irq_handler(state->intr_vec, rtl8139_irq_handler, state)){
-				ERROR("RTL8139 IRQ Handler failed registration\n");
-			}
+		// GRUESOME HACK
+		state->intr_vec = RTL8139_IRQ;
 
-			for (int i = 0; i < 256; i++){
-				nk_unmask_irq(i);		
-			}
-			DEBUG("Finished initing rtl8139\n");
-			
+		if (register_irq_handler(state->intr_vec, rtl8139_irq_handler, state)){
+			ERROR("RTL8139 IRQ Handler failed registration\n");
+		} else {
+			DEBUG("Registered IRQ handler\n");
+		}
+
+		nk_unmask_irq(state->intr_vec);
+
+
+		DEBUG("Finished initing rtl8139\n\n\n");
+		//================================================
+
+
+		if (ONCE){	
+			ONCE = 0;
 			//Create Ethernet Packet for testing
 			uint8_t p[64];
 			memset(p,0,64);
@@ -737,11 +769,9 @@ int rtl8139_pci_init(struct naut_info * naut)
 
 			//write status register
 			uint32_t TxStatusTemp = 0;//READ_MEM32(state, TxStatus0);
-			TxStatusTemp = 64;
+			TxStatusTemp = 64;//size of ethernet packet
 			WRITE_MEM32(state, TxStatus0, TxStatusTemp);
-
-			udelay(10);
-			DEBUG("Interrupt Status: 0x%x\n", READ_MEM16(state, IntrStatus));
+		}
 
 	  }
 	}
