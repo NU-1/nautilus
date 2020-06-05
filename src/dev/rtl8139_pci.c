@@ -107,11 +107,6 @@ struct rtl8139_state {
 	char name[DEV_NAME_LEN];
 	uint8_t mac_addr[6];
 
-	//   struct e1000e_desc_ring *tx_ring;
-	//   struct e1000e_desc_ring *rxd_ring;
-	//   // a circular queue mapping between callback function and tx descriptor
-	//   struct e1000e_map_ring *tx_map;
-	//   // a circular queue mapping between callback funtion and rx descriptor
 	uint32_t 	rec_buf_addr;
 	//   // the size of receive buffers
 	uint64_t 	rec_buf_size;
@@ -399,9 +394,17 @@ static int rtl8139_send(struct rtl8139_state* state, uint8_t *packetAddr, uint64
 	//BEFORE DMA IS COMPLETE
 	//what do we do?
 
+	for (int i = 0; i < 4; i++){
+		uint32_t TxTemp = READ_MEM32(state, TxStatus0 + i*4);
+		DEBUG("\nPair %d Status = %x, Address = %x \n", i, TxTemp, READ_MEM32(state, TxAddr0 + i*4));
+		WRITE_MEM16(state, TxStatus0 + i*4, TxTemp | (1 << 12));
+	}
+	DEBUG("\n\n");
+
 	//check for packet size
 	if (packetLen > MAX_TU){
-		ERROR("RTL8139 Send Packet: Packet is too large\n");
+		DEBUG("RTL8139 Send Packet: Packet is too large\n");
+		return -1;
 	}
 
 	//determine which transmit register pair to use
@@ -413,6 +416,8 @@ static int rtl8139_send(struct rtl8139_state* state, uint8_t *packetAddr, uint64
 	//write status register
 	uint32_t TxStatusTemp = packetLen & 0x1fff;
 	WRITE_MEM32(state, TxStatus0 + entry * 4, TxStatusTemp);
+	state->TRCounter++;
+	DEBUG("TxStatus temp");
 
 	return 0;
 }
@@ -422,13 +427,13 @@ static int rtl8139_post_send(void *state,
 		uint64_t len,
 		void (*callback)(nk_net_dev_status_t status, void *context),
 		void *context){
-	DEBUG("RTL8139 Post Send\n");
+	DEBUG("Post_Send start\n");
 	//Do something with callback
 	uint8_t result;
 
 	//if callback successful
 	result = rtl8139_send((struct rtl8139_state*) state, src, len);
-
+	DEBUG("Post_Send exit \n");
 	return 0;
 }
 
@@ -447,53 +452,37 @@ static int rtl8139_irq_handler(excp_entry_t * excp, excp_vec_t vec, void *s)
 
 	struct rtl8139_state* state = (struct rtl8139_state *)s;
 
-	for (int i = 0; i < 4; i++){
-		uint32_t TxTemp = READ_MEM32(state, TxStatus0 + i*4);
-		DEBUG("Pair %d Status = %x, Address = %x \n", i, TxTemp, READ_MEM32(state, TxAddr0 + i*4));
-		WRITE_MEM16(state, TxStatus0 + i*4, TxTemp | (1 << 12));
-	}
-	DEBUG("\n\n");
-
 	uint16_t isr = READ_MEM16(state, IntrStatus);
-	DEBUG("Interrupt Status: 0x%x\n", isr);
+	DEBUG("Interrupt Entrance Status: 0x%x\n", isr);
   
 	void (*callback)(nk_net_dev_status_t, void*) = NULL;
 	void *context = NULL;
 	nk_net_dev_status_t status = NK_NET_DEV_STATUS_SUCCESS;
-	
-	if(isr & 0xC) {
-		// transmit interrupt ERROR or OK
-		DEBUG("Handle Transmit Interrupt\n");
-		DEBUG("TCR Register = %x\n", READ_MEM32(state, TxConfig));
 
-		if (isr & 0x8){
-			DEBUG("RTL8139 Transmit Handler Error\n");
-		}
-
-		if (isr & 0x4){
-			DEBUG("RTL8139 Transmit Handler OK\n");
-		}
-	}
-  
-	if (isr & 0x3){
-		// receive interrupt ERROR or OK
-		DEBUG("Handle Receive Interrupt\n");
-
-
-		if(isr & 0x2){
-			DEBUG("RTL8139 Receive Handler Error\n");
-		}
-
-		if(isr & 0x1){
-			DEBUG("RTL8139 Receive Handler OK\n");
-		}
-
+	if (isr & 0x8){
+		DEBUG("RTL8139 Transmit Handler Error\n");
+		WRITE_MEM16(state, IntrStatus, 0x0008);
 	}
 
-	WRITE_MEM16(state, IntrStatus, 0x0004);
-	WRITE_MEM32(state, TxStatus0, 1<<13);//write only the OWN bit, clear everything else
-	WRITE_MEM32(state, TxAddr0, 0);//clear address
-	DEBUG("Interrupt Status: 0x%x\n", READ_MEM16(state, IntrStatus));
+	if (isr & 0x4){
+		DEBUG("RTL8139 Transmit Handler OK\n");
+		WRITE_MEM16(state, IntrStatus, 0x0004);
+	}
+
+
+	if(isr & 0x2){
+		DEBUG("RTL8139 Receive Handler Error\n");
+		WRITE_MEM16(state, IntrStatus, 0x0002);
+	}
+
+	if(isr & 0x1){
+		DEBUG("RTL8139 Receive Handler OK\n");
+		WRITE_MEM16(state, IntrStatus, 0x0001);
+	}
+
+
+
+	DEBUG("Interrupt Exit Status: 0x%x\n", READ_MEM16(state, IntrStatus));
 	//WRITE_MEM16(state, IntrMask, 0x000f);
 
 	DEBUG("end irq\n\n");
@@ -546,7 +535,7 @@ int rtl8139_pci_init(struct naut_info * naut)
       struct pci_cfg_space *cfg = &pdev->cfg;
 
       DEBUG("Device %u is a 0x%x:0x%x\n", pdev->num, cfg->vendor_id, cfg->device_id);
-      // intel vendor id and e1000e device id
+      // realtek vendor id and rtl8139 device id
       if (cfg->vendor_id==REALTEK_VENDOR_ID && cfg->device_id==RTL8139_DEVICE_ID) {
 		int foundio=0, foundmem=0;
         DEBUG("Found RTL8139 Device :)\n");
@@ -562,7 +551,7 @@ int rtl8139_pci_init(struct naut_info * naut)
 	
 	// We will only support MSI for now
 
-        // find out the bar for e1000e
+        // find out the bar for rtl8139
         for (int i=0;i<6;i++) {
 			uint32_t bar = pci_cfg_readl(bus->num, pdev->num, 0, 0x10 + i*4);
 			uint32_t size;
@@ -628,7 +617,7 @@ int rtl8139_pci_init(struct naut_info * naut)
              state->ioport_start, state->ioport_end,
              state->mem_start, state->mem_end);
 
-		uint16_t pci_cmd = PCI_CMD_MEM_ACCESS_EN | PCI_CMD_IO_ACCESS_EN | PCI_CMD_LANRW_EN; // | E1000E_PCI_CMD_INT_DISABLE;
+		uint16_t pci_cmd = PCI_CMD_MEM_ACCESS_EN | PCI_CMD_IO_ACCESS_EN | PCI_CMD_LANRW_EN;
         DEBUG("init fn: new pci cmd: 0x%04x\n", pci_cmd);
         pci_cfg_writew(bus->num,pdev->num,0, PCI_CMD_OFFSET, pci_cmd);
         DEBUG("init fn: pci_cmd 0x%04x expects 0x%04x\n",
@@ -646,7 +635,7 @@ int rtl8139_pci_init(struct naut_info * naut)
         state->netdev = nk_net_dev_register(state->name, 0, &ops, (void *)state);
 	
         if (!state->netdev) {
-          ERROR("init fn: Cannot register the e1000e device \"%s\"", state->name);
+          ERROR("init fn: Cannot register the rtl8139 device \"%s\"", state->name);
           return -1;
         }
 
@@ -708,6 +697,7 @@ int rtl8139_pci_init(struct naut_info * naut)
 		rcr_val &= ~(0x3 << 11);
 		// unsetting bit 7 to tell it to wrap around the ring buffere (not assume that there is extra space after)
 		rcr_val &= ~(0x1 << 7);
+		rcr_val |= 111111;//accept all packets
 		WRITE_MEM32(state, RxConfig, rcr_val);
 
 
@@ -752,29 +742,20 @@ int rtl8139_pci_init(struct naut_info * naut)
 		//================================================
 
 
-		if (ONCE){	
-			DEBUG("Testing Send\n");
-			ONCE = 0;
-			//Create Ethernet Packet for testing
-			uint8_t p[64];
-			memset(p,0,64);
+		// if (ONCE){	
+		// 	DEBUG("Testing Send\n");
+		// 	ONCE = 0;
+		// 	//Create Ethernet Packet for testing
+		// 	uint8_t p[64];
+		// 	memset(p,0,64);
 
-			p[0]=p[1]=p[2]=p[3]=p[4]=p[5]=0xff;  // destination is broadcast address ff:ff:ff:ff:ff:ff
-			p[6]=1; p[7]=2; p[8]=3; p[9]=4; p[10]=5; p[11]=6; // src is 01:02:03:04:05:06
-			p[12]= 8; p[13]=0;  // type is IP (see  https://en.wikipedia.org/wiki/EtherType)
-			strcpy(&p[14],"Hello World");
+		// 	p[0]=p[1]=p[2]=p[3]=p[4]=p[5]=0xff;  // destination is broadcast address ff:ff:ff:ff:ff:ff
+		// 	p[6]=1; p[7]=2; p[8]=3; p[9]=4; p[10]=5; p[11]=6; // src is 01:02:03:04:05:06
+		// 	p[12]= 8; p[13]=0;  // type is IP (see  https://en.wikipedia.org/wiki/EtherType)
+		// 	strcpy(&p[14],"Hello World");
 
-			//Write address of packet to address register
-			uint32_t t_p = (uint64_t) (void *) p & 0x00000000ffffffff;
-			WRITE_MEM32(state, TxAddr0, t_p);
-			DEBUG("Address written\n");
-			//write status register
-			uint32_t TxStatusTemp = 0;//READ_MEM32(state, TxStatus0);
-			TxStatusTemp = 64;//size of ethernet packet
-			DEBUG("Sending Status Request\n");
-			WRITE_MEM32(state, TxStatus0, TxStatusTemp);
-			DEBUG("Send Complete\n");
-		}
+		// 	rtl8139_post_send(state, p, 64, NULL, NULL);
+		// }
 
 	  }
 	}
